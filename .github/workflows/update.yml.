@@ -1,51 +1,59 @@
-import json, os, urllib.request, html
+import json, os, urllib.request
 from pathlib import Path
+from PIL import Image, ImageDraw, ImageFont
 
-API_KEY = os.environ['APISH_KEY']
-url = 'https://api.api.sh/royalroad/v1/fiction?id=194924'
-req = urllib.request.Request(url, headers={'x-api-key': API_KEY, 'User-Agent': 'PulseFollowerTracker/1.0'})
+KEY = os.environ['APISH_KEY']
+URL = 'https://api.api.sh/royalroad/v1/fiction?id=194924'
+req = urllib.request.Request(URL, headers={'x-api-key': KEY, 'User-Agent':'PulseFollowerTracker/2.0', 'Accept':'application/json'})
 with urllib.request.urlopen(req, timeout=30) as response:
     payload = json.load(response)
 
 def find_followers(value):
     if isinstance(value, dict):
-        for key in ('followers', 'follower_count'):
+        for key in ('followers', 'follower_count', 'followersCount'):
             v = value.get(key)
-            if isinstance(v, int) and not isinstance(v, bool):
-                return v
-        for k in ('fiction', 'raw', 'data'):
-            if k in value:
-                found = find_followers(value[k])
+            if isinstance(v, int) and not isinstance(v, bool): return v
+            if isinstance(v, str) and v.isdigit(): return int(v)
+        for key in ('fiction', 'data', 'result', 'raw'):
+            if key in value:
+                found = find_followers(value[key])
                 if found is not None: return found
     return None
 
 followers = find_followers(payload)
 if followers is None or followers < 0:
-    raise ValueError('Follower count missing or unexpected response; refusing to publish incorrect tracker')
+    raise ValueError('Could not locate a valid follower count in API response; no image published')
 
 unlocked = followers // 100
 progress = followers % 100
 next_goal = (unlocked + 1) * 100
-remaining = 100 - progress
-bar_width = round(560 * progress / 100)
+W, H = 1000, 220
+im = Image.new('RGB', (W,H), '#241e34')
+d = ImageDraw.Draw(im)
+def font(size, bold=False):
+    paths = ['/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf' if bold else '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', '/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf' if bold else '/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf']
+    for path in paths:
+        if Path(path).exists(): return ImageFont.truetype(path, size)
+    return ImageFont.load_default()
+def centre(text, y, f, fill):
+    box = d.textbbox((0,0),text,font=f)
+    d.text(((W-(box[2]-box[0]))/2,y),text,font=f,fill=fill)
+def right(text, x, y, f, fill):
+    box = d.textbbox((0,0),text,font=f)
+    d.text((x-(box[2]-box[0]),y),text,font=f,fill=fill)
 
-svg = f'''<svg xmlns="http://www.w3.org/2000/svg" width="640" height="214" viewBox="0 0 640 214" role="img" aria-label="Pulse has {followers} followers, {unlocked} bonus chapters unlocked, {progress} of 100 followers towards the next bonus chapter">
-<rect width="640" height="214" rx="14" fill="#241e34"/>
-<rect x="1" y="1" width="638" height="212" rx="13" fill="none" stroke="#b787df" stroke-width="2"/>
-<g font-family="Arial,Helvetica,sans-serif" text-anchor="middle">
-<text x="320" y="29" font-size="17" font-weight="bold" fill="#e9d2ff">+1 BONUS CHAPTER EVERY 100 FOLLOWERS</text>
-<text x="164" y="77" font-size="35" font-weight="bold" fill="#ffffff">{followers:,}</text>
-<text x="164" y="97" font-size="13" fill="#cfc2dd">TOTAL FOLLOWERS</text>
-<text x="477" y="77" font-size="35" font-weight="bold" fill="#e9d2ff">{unlocked}</text>
-<text x="477" y="97" font-size="13" fill="#cfc2dd">BONUS CHAPTERS UNLOCKED</text>
-<text x="40" y="128" font-size="14" text-anchor="start" fill="#cfc2dd">NEXT UNLOCK: {next_goal:,} FOLLOWERS</text>
-<text x="600" y="128" font-size="14" text-anchor="end" fill="#e9d2ff">{progress}/100</text>
-<text x="320" y="193" font-size="14" fill="#cfc2dd">{remaining} more followers until the next bonus chapter!</text>
-</g>
-<rect x="40" y="143" width="560" height="16" rx="8" fill="#36404c"/>
-<rect x="40" y="143" width="{bar_width}" height="16" rx="8" fill="#b787df"/>
-</svg>'''
+d.rounded_rectangle((2,2,W-3,H-3),radius=18,outline='#b787df',width=3)
+centre('+1 BONUS CHAPTER EVERY 100 FOLLOWERS', 18, font(28,True),'#e9d2ff')
+d.line((30,65,W-30,65),fill='#624878',width=2)
+d.text((34,78),'TOTAL FOLLOWERS',font=font(17,True),fill='#cfc2dd')
+d.text((34,104),f'{followers:,}',font=font(38,True),fill='#ffffff')
+right('NEXT UNLOCK',W-34,78,font(17,True),'#cfc2dd')
+right(f'{next_goal:,} followers',W-34,104,font(38,True),'#e9d2ff')
+d.rounded_rectangle((34,160,W-34,174),radius=7,fill='#3b304a')
+if progress:
+    d.rounded_rectangle((34,160,34+round((W-68)*progress/100),174),radius=7,fill='#b787df')
+centre(f'{progress} / 100 towards the next bonus chapter',185,font(18),'#cfc2dd')
 Path('docs').mkdir(exist_ok=True)
-Path('docs/progress.svg').write_text(svg, encoding='utf-8')
-Path('docs/status.json').write_text(json.dumps({'followers': followers, 'unlocked': unlocked, 'progress': progress, 'next_goal': next_goal}, indent=2), encoding='utf-8')
-print(f'Updated: {followers} followers, {unlocked} unlocked')
+im.save('docs/progress.png',optimize=True)
+Path('docs/status.json').write_text(json.dumps({'followers':followers,'unlocked':unlocked,'progress':progress,'next_goal':next_goal},indent=2)+'\n')
+print(f'Updated: {followers} followers, next milestone {next_goal}')
